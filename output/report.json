@@ -1,0 +1,12 @@
+[
+  {
+    "title": "DEMO: Sample High Severity Finding",
+    "severity": "High",
+    "recommendation": "This is a demo entry to validate report formatting and severity coloring.",
+    "evidence": [
+      {
+        "note": "Remove this demo block before final GitHub release."
+      }
+    ]
+  }
+]

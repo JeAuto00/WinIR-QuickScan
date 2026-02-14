@@ -1,0 +1,14 @@
+﻿{
+    "Hostname":  "CYBERSWORD0",
+    "User":  "stair",
+    "Domain":  "CYBERSWORD0",
+    "OS":  "Microsoft Windows 11 Pro",
+    "OSBuild":  "26200",
+    "BootTime":  "\/Date(1769933273135)\/",
+    "IPs":  [
+                "172.18.160.1",
+                "192.168.56.10",
+                "192.168.1.80",
+                "127.0.0.1"
+            ]
+}
