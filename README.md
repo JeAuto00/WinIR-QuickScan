@@ -58,7 +58,7 @@ WinIR-QuickScan/
 │   ├── system\_events.json
 │   ├── startup\_items.json
 │   └── report.html
-├── /
+├── screenshot
 │   ├── collector\_run.png
 │   ├── json\_output.png
 │   └── report\_view.png
