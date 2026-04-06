@@ -1,6 +1,6 @@
 🛡️ WinIR-QuickScan
 
-Lightweight Windows Incident Response Collection & Analysis Toolkit
+Lightweight Windows Incident Response Collection \& Analysis Toolkit
 
 WinIR-QuickScan is a defensive incident-response utility that collects high-value forensic artifacts from a Windows system and performs automated analysis to identify suspicious activity commonly investigated by SOC and IR teams.
 
@@ -42,7 +42,7 @@ Modular detection logic written in Python
 
 PowerShell – artifact collection
 
-Python 3 – detection logic & reporting
+Python 3 – detection logic \& reporting
 
 Windows Event Logs
 
@@ -51,17 +51,17 @@ HTML / JSON – analyst-friendly output
 📁 Project Structure
 WinIR-QuickScan/
 ├── collector.ps1        # Forensic artifact collection
-├── analyze.py           # Detection engine & report generator
+├── analyze.py           # Detection engine \& report generator
 ├── detections.py        # Modular detection rules
 ├── output/
-│   ├── security_events.json
-│   ├── system_events.json
-│   ├── startup_items.json
+│   ├── security\_events.json
+│   ├── system\_events.json
+│   ├── startup\_items.json
 │   └── report.html
-├── screenshots/
-│   ├── collector_run.png
-│   ├── json_output.png
-│   └── report_view.png
+├── /
+│   ├── collector\_run.png
+│   ├── json\_output.png
+│   └── report\_view.png
 └── README.md
 
 ▶️ How It Works
@@ -76,7 +76,7 @@ Findings are summarized in an HTML report for rapid review
 
 🚀 Usage
 1️⃣ Run the Collector (Administrator Required)
-.\collector.ps1 -HoursBack 48
+.\\collector.ps1 -HoursBack 48
 
 2️⃣ Run the Analyzer
 python analyze.py
@@ -106,24 +106,18 @@ Run only on systems you own or are authorized to analyze.
 
 🗺️ Roadmap
 
- Sigma-style rule support
+Sigma-style rule support
 
- MITRE ATT&CK mapping
+MITRE ATT\&CK mapping
 
- CSV export for SIEM ingestion
+CSV export for SIEM ingestion
 
- Timeline-based analysis mode
+Timeline-based analysis mode
 
- Hash validation of persistence files
+Hash validation of persistence files
 
 👤 Author
 
 Joseph E. Autorino
 GitHub: https://github.com/JeAuto00
-
-
-
-
-
-
 
