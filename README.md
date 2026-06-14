@@ -1,6 +1,6 @@
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 
-🛡️ WinIR-QuickScan
+🛡️ WinIR-QuickEDR
 
 🔥 WinIR-QuickScan — SOC + EDR Detection Platform
 🛡️ Overview
