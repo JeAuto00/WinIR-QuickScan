@@ -168,12 +168,21 @@ WinIR-QuickScan/
 
 <p align="center">
   <img src="screenshots/dashboard.png" width="900">
+    ## Screenshots
+
+### Attack Chain Analysis
+![Attack Chain](screenshots/attackchain.png)
+
+### Monitoring Dashboard
+![Monitoring Dashboard](screenshots/monitoring.png)
+
+### Network Analysis
+![Network Analysis](screenshots/network.png)
+
+### Threat Hunting Dashboard
+![Threat Hunting Dashboard](screenshots/network099.png)
 </p>
->>>>>>> 39541ce (Added dashboard screenshot)
-│   ├── collector\_run.png
-│   ├── json\_output.png
-│   └── report\_view.png
-└── README.md
+
 
 ▶️ How It Works
 
