@@ -1,0 +1,14 @@
+{
+  "bad_ips": [
+    "93.184.216.34"
+  ],
+  "bad_domains": [
+    "evil.example.com"
+  ],
+  "bad_processes": [
+    "mimikatz",
+    "nc",
+    "netcat"
+    
+  ]
+}

@@ -34,6 +34,23 @@ def calculate_risk(findings):
 
     return min(score, 100)
 
+def collect_network_telemetry():
+    net_path = OUTPUT_DIR / "network_connections.json"
+
+    cmd = [
+        "powershell",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | ConvertTo-Json -Depth 3"
+    ]
+
+    result = subprocess.run(cmd, cwd=PROJECT_DIR, capture_output=True, text=True)
+
+    if result.returncode == 0 and result.stdout.strip():
+        net_path.write_text(result.stdout, encoding="utf-8")
+
+    return net_path
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -72,6 +89,8 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await alerts(update, context)
     await send_report(update)
+
+    collect_network_telemetry()
 
     collect_network_connections()
 
@@ -420,6 +439,74 @@ def run_detection_engine():
                         "mitre": "T1204"
                     })
 
+    # --- NETWORK / SMB / LATERAL MOVEMENT DETECTIONS ---
+    net_path = OUTPUT_DIR / "network_connections.json"
+
+    if net_path.exists():
+        try:
+            conns = json.loads(net_path.read_text(encoding="utf-8"))
+
+            if isinstance(conns, dict):
+                conns = [conns]
+
+            smb_ports = {"445", "139"}
+            lateral_ports = {
+                "135": "RPC",
+                "139": "NetBIOS",
+                "445": "SMB",
+                "3389": "RDP",
+                "5985": "WinRM",
+                "5986": "WinRM HTTPS"
+            }
+
+            smb_hits = []
+            lateral_hits = []
+            external_hits = []
+
+            for c in conns:
+                local_port = str(c.get("LocalPort", ""))
+                remote_port = str(c.get("RemotePort", ""))
+                remote_ip = str(c.get("RemoteAddress", ""))
+                state = str(c.get("State", ""))
+
+                if local_port in smb_ports or remote_port in smb_ports:
+                    smb_hits.append(f"{remote_ip}:{remote_port} ({state})")
+
+                if remote_port in lateral_ports:
+                    lateral_hits.append(f"{remote_ip}:{remote_port}/{lateral_ports[remote_port]} ({state})")
+
+                if remote_ip and not remote_ip.startswith(("127.", "10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",          "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")):
+                    if remote_ip not in ("0.0.0.0", "::", "::1"):
+                        external_hits.append(f"{remote_ip}:{remote_port} ({state})")
+
+            if smb_hits:
+                findings.append({
+                    "title": f"SMB network activity detected: {len(smb_hits)} connection(s)",
+                    "severity": "Medium",
+                    "mitre": "T1021.002 - SMB/Windows Admin Shares"
+                })
+
+            if lateral_hits:
+                findings.append({
+                    "title": f"Possible lateral movement ports observed: {', '.join(sorted(set(lateral_hits[:5])))}",
+                    "severity": "High",
+                    "mitre": "T1021 - Remote Services"
+                })
+
+            if len(external_hits) >= 5:
+                findings.append({
+                    "title": f"Multiple external network connections detected: {len(external_hits)} connection(s)",
+                    "severity": "Medium",
+                    "mitre": "T1071 - Application Layer Protocol"
+                })
+
+        except Exception as e:
+            findings.append({
+                "title": f"Network telemetry parsing failed: {e}",
+                "severity": "Low",
+                "mitre": "N/A"
+            })
+
     return findings
 
 
@@ -500,12 +587,69 @@ async def godmode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(summary)
 
+def build_soc_summary():
+    report_json = OUTPUT_DIR / "report.json"
+
+    if not report_json.exists():
+        return "No report data found."
+
+    with open(report_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    network = data.get("network_summary", {})
+
+    risk_score = network.get("risk_score", 0)
+    risk_level = network.get("risk_level", "Low")
+
+    top_processes = network.get("top_processes", [])[:5]
+    mitre = network.get("mitre_heatmap", [])[:5]
+
+    process_text = "\n".join(
+        f"• {p.get('process')} ({p.get('count')})"
+        for p in top_processes
+    ) or "None"
+
+    mitre_text = "\n".join(
+        f"• {m.get('technique')} ({m.get('count')})"
+        for m in mitre
+    ) or "None"
+
+    ioc_hits = network.get("ioc_hits", [])[:5]
+
+    ioc_text = "\n".join(
+        f"🚨 {ioc.get('title')} | {ioc.get('severity')}"
+        for ioc in ioc_hits
+    ) or "None"
+
+    return f"""
+🚨 WinIR SOC Report
+
+Risk Score: {risk_score}/100
+Risk Level: {risk_level}
+
+🔥 Top Processes
+{process_text}
+
+🎯 MITRE Heatmap
+{mitre_text}
+
+IOC Hits:
+{ioc_text}
+"""
+
 
 async def send_report(update: Update):
     report = OUTPUT_DIR / "report.html"
 
     if report.exists():
-        await update.message.reply_document(document=open(report, "rb"))
+
+        summary = build_soc_summary()
+
+        await update.message.reply_text(summary)
+
+        await update.message.reply_document(
+            document=open(report, "rb")
+    )
     else:
         await update.message.reply_text("Report not found.")
 
@@ -527,5 +671,5 @@ app.add_handler(CommandHandler("alerts", alerts))
 app.add_handler(CommandHandler("report", report))
 app.add_handler(CommandHandler("godmode", godmode))
 
-print("🔥 WinIR SOC Bot Running...")
+print("🔥 WinIR EDR SOC Bot Running...")
 app.run_polling()

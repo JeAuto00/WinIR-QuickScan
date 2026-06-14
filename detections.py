@@ -5,6 +5,35 @@ from typing import Any, Dict, List, Optional
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+import json
+import ipaddress
+from pathlib import Path
+
+POWERSHELL_DOWNLOAD_KEYWORDS = [
+    "invoke-webrequest",
+    "downloadfile",
+    "wget",
+    "curl",
+    "irm",
+    "iex",
+    "invoke-expression"
+]
+
+LOLBINS = {
+    "mshta": "T1218.005",
+    "rundll32": "T1218.011",
+    "regsvr32": "T1218.010",
+    "certutil": "T1105",
+    "bitsadmin": "T1197",
+    "wmic": "T1047"
+}
+
+SEVERITY_POINTS = {
+    "Low": 5,
+    "Medium": 15,
+    "High": 30,
+    "Critical": 50
+}
 
 @dataclass
 class Finding:
@@ -315,6 +344,346 @@ def _extract_logon_type(message: str):
     m = re.search(r"(\d+)", val)
     return int(m.group(1)) if m else None
 
+def detect_network_behavior(output_dir="output"):
+    findings = []
+
+    network_path = Path(output_dir) / "network_connections.json"
+    connections = load_json_file(network_path)
+    
+    iocs = load_iocs()
+
+    bad_ips = set(iocs.get("bad_ips", []))
+
+    bad_processes = set(
+        p.lower()
+        for p in iocs.get("bad_processes", [])
+    )
+
+    
+
+    external_connections = []
+    top_external_ips = []
+    process_counts = Counter()
+    incident_timeline = []
+    process_tree = []
+    attack_chains = []
+
+    for conn in connections:
+        process = str(conn.get("ProcessName", "Unknown")).lower()
+        parent = str(conn.get("ParentProcess", "")).lower()
+        remote_ip = str(conn.get("RemoteAddress", ""))
+        remote_port = conn.get("RemotePort")
+        pid = conn.get("PID")
+        command_line = str(conn.get("CommandLine", "")).lower()
+        base_process = process.replace(".exe", "")
+
+        if base_process in bad_processes:
+            findings.append({
+                "severity": "Critical",
+                "title": f"Known Bad Process Observed: {process}",
+                "recommendation": "Investigate the process immediately and verify whether it is authorized.",
+                "evidence": {
+                    "process": process,
+                    "parent": parent,
+                    "pid": pid,
+                    "command_line": command_line,
+                    "ioc_type": "bad_process"
+                },
+                "mitre": [
+                    {"id": "T1059", "name": "Command and Scripting Interpreter"}
+                ]
+            })
+
+     
+        if remote_ip in bad_ips:
+            findings.append({
+                "severity": "Critical",
+                "title": f"Known Bad IP Connection: {remote_ip}",
+                "recommendation": "Immediately investigate this connection.",
+                "evidence": {
+                    "process": process,
+                    "parent": parent,
+                    "pid": pid,
+                    "destination": f"{remote_ip}:{remote_port}"
+                },
+                "mitre": [
+                    {"id": "T1071", "name": "Application Layer Protocol"},
+                    {"id": "T1102", "name": "Web Service"}
+                ]
+            })
+
+
+        OFFICE_PROCESSES = [
+            "winword",
+            "excel",
+            "outlook",
+            "powerpnt"
+        ]
+
+        if (
+            parent.replace(".exe", "") in OFFICE_PROCESSES
+            and process.replace(".exe", "") in ["powershell", "pwsh"]
+        ):
+            attack_chains.append({
+                "parent": parent,
+                "child": process,
+                "pid": pid,
+                "destination": f"{remote_ip}:{remote_port}",
+                "techniques": [
+                    "T1204",
+                    "T1059.001"
+                ]
+            })
+
+        timeline_event = {
+            "event": "Network connection observed",
+            "process": process,
+            "parent": parent,
+            "pid": pid,
+            "destination": f"{remote_ip}:{remote_port}",
+            "command_line": command_line[:300]
+        }
+
+        process_tree.append({
+            "parent": parent or "unknown",
+            "child": process or "unknown",
+            "pid": pid,
+            "destination": f"{remote_ip}:{remote_port}",
+            "command_line": command_line[:200]
+        })
+
+        process_counts[process] += 1
+
+        if base_process in LOLBINS:
+            findings.append({
+                "severity": "High",
+                "title": f"LOLBin Activity Detected: {process}",
+                "recommendation": "Investigate this living-off-the-land binary. Review command line activity, parent process, and network destinations.",
+                "evidence": {
+                    "process": process,
+                    "parent": parent,
+                    "command_line": command_line,
+                    "destination": f"{remote_ip}:{remote_port}"
+                },
+                "mitre": [
+                    {
+                        "id": LOLBINS[base_process],
+                        "name": "System Binary Proxy Execution"
+                    }
+                ]
+            })
+
+        if process in ["powershell", "pwsh"]:
+            if any(keyword in command_line for keyword in POWERSHELL_DOWNLOAD_KEYWORDS):
+                findings.append({
+                    "severity": "High",
+                    "title": "PowerShell Download Activity Detected",
+                    "recommendation": "Review PowerShell command execution and validate whether download activity is expected.",
+                    "evidence": {
+                        "process": process,
+                        "parent": parent,
+                        "command_line": command_line,
+                        "destination": f"{remote_ip}:{remote_port}"
+                    },
+                    "mitre": [              
+                        {"id": "T1059.001", "name": "PowerShell"},
+                        {"id": "T1105", "name": "Ingress Tool Transfer"}
+                    ]
+                })
+
+        if not is_external_ip(remote_ip):
+            continue
+
+        external_connections.append(conn)
+        top_external_ips.append(remote_ip)
+        incident_timeline.append(timeline_event)
+
+        if process in SUSPICIOUS_NETWORK_PROCESSES:
+            mitre_detail = SUSPICIOUS_NETWORK_PROCESSES[process]
+
+            incident_timeline.append({
+                "event": "Suspicious process network activity",
+                "process": process,
+                "parent": parent,
+                "pid": pid,
+                "destination": f"{remote_ip}:{remote_port}",
+                "command_line": command_line[:300]
+            })
+
+            findings.append({
+                "severity": "High",
+                "title": f"Suspicious External Network Activity: {process}.exe",
+                "recommendation": "Investigate whether this process should be making outbound network connections. Review the parent process, command line, user context, destination IP, and related Windows events.",
+                "evidence": {
+                    "process": f"{process}.exe",
+                    "parent": parent,
+                    "pid": pid,
+                    "destination": f"{remote_ip}:{remote_port}",
+                    "mitre": [
+                        mitre_detail,
+                        "T1071 - Application Layer Protocol"
+                    ]
+                },
+                "mitre": [
+                    {"id": mitre_detail.split(" - ")[0], "name": mitre_detail.split(" - ")[1]},
+                    {"id": "T1071", "name": "Application Layer Protocol"}
+                ]
+            })
+
+        if process == "powershell" and parent in [
+            "winword.exe",
+            "excel.exe",
+            "outlook.exe",
+            "powerpnt.exe"
+        ]:
+            findings.append({
+                "severity": "High",
+                "title": "PowerShell Spawned From Office Application",
+                "recommendation": "Investigate possible macro execution or malicious document activity.",
+                "evidence": {
+                    "process": process,
+                    "parent": parent,
+                    "destination": f"{remote_ip}:{remote_port}"
+                },
+                "mitre": [
+                    {"id": "T1204", "name": "User Execution"},
+                    {"id": "T1059.001", "name": "PowerShell"}
+                ]
+            })
+
+        if remote_port in SUSPICIOUS_PORTS:
+            findings.append({
+                "severity": "High",
+                "title": f"Suspicious External Port Connection: {remote_port}",
+                "recommendation": "Review the process and destination. Ports like 4444, 1337, 5555, and 31337 are commonly associated with testing tools, backdoors, reverse shells, or unusual admin activity.",
+                "evidence": {
+                    "process": f"{process}.exe",
+                    "parent": parent,
+                    "pid": pid,
+                    "destination": f"{remote_ip}:{remote_port}",
+                    "remote_ip": remote_ip,
+                    "remote_port": remote_port
+                },
+                "mitre": [
+                    {"id": "T1071", "name": "Application Layer Protocol"},
+                    {"id": "T1105", "name": "Ingress Tool Transfer"}
+                ]
+            })
+
+    if len(external_connections) >= 100:
+        findings.append({
+            "severity": "Medium",
+            "title": "Multiple External Network Connections Detected",
+            "recommendation": "Review whether this many outbound connections is normal for the host. Check top processes and destinations.",
+            "evidence": f"External connections count: {len(external_connections)}",
+            "mitre": [
+                {"id": "T1071", "name": "Application Layer Protocol"}
+            ]
+        })
+
+    top_10 = Counter(top_external_ips).most_common(10)
+    top_processes = process_counts.most_common(10)
+
+    risk_score = 0
+
+    for finding in findings:
+        severity = finding.get("severity", "Low")
+        risk_score += SEVERITY_POINTS.get(severity, 5)
+
+    risk_score = min(risk_score, 100)
+
+    mitre_counts = Counter()
+
+    for finding in findings:
+        for technique in finding.get("mitre", []):
+            if isinstance(technique, dict):
+                technique_id = technique.get("id", "Unknown")
+                technique_name = technique.get("name", "Unknown")
+                label = f"{technique_id} - {technique_name}"
+                mitre_counts[label] += 1
+
+            elif isinstance(technique, str):
+                mitre_counts[technique] += 1
+
+    risky_processes = Counter()
+    finding_counts = Counter()
+    destination_counts = Counter(top_external_ips)
+
+    for finding in findings:
+        finding_counts[finding.get("title", "Unknown Finding")] += 1
+
+        evidence = finding.get("evidence", {})
+        if isinstance(evidence, dict):
+            proc = evidence.get("process")
+            if proc:
+                risky_processes[proc] += 1
+
+    ioc_hits = []
+
+    for finding in findings:
+        title = finding.get("title", "")
+        if "Known Bad" in title:
+            ioc_hits.append({
+                "title": title,
+                "severity": finding.get("severity", "Critical"),
+                "evidence": finding.get("evidence", {})
+            })
+
+    network_summary = {
+            "threat_hunting": {
+                "top_mitre_techniques": [
+                    {"technique": technique, "count": count}
+                    for technique, count in mitre_counts.most_common(5)
+                ],
+                "top_risky_processes": [
+                    {"process": proc, "count": count}
+                    for proc, count in risky_processes.most_common(10)
+                ],
+                "top_destinations": [
+                    {"destination": ip, "count": count}
+                    for ip, count in destination_counts.most_common(10)
+                ],
+                "top_findings": [
+                    {"title": title, "count": count}
+                    for title, count in finding_counts.most_common(10)
+                ],
+        },
+
+        "external_connection_count": len(external_connections),
+
+        "top_external_ips": [
+            {"ip": ip, "count": count}
+            for ip, count in top_10
+        ],
+
+        "top_processes": [
+            {"process": proc, "count": count}
+            for proc, count in top_processes
+        ],
+
+        "risk_score": risk_score,
+
+        "risk_level": (
+            "Critical" if risk_score >= 80
+            else "High" if risk_score >= 60
+            else "Medium" if risk_score >= 30
+            else "Low"
+        ),
+        "incident_timeline": incident_timeline[:25],
+        
+
+        "process_tree": process_tree[:50],
+        "attack_chains": attack_chains,
+        "mitre_heatmap": [
+            {"technique": technique, "count": count}
+            for technique, count in mitre_counts.most_common(10)
+        ],
+        "ioc_hits": ioc_hits,
+
+    }
+
+    return findings, network_summary
+
 def _extract_account_name(message: str):
     # In 4672 messages usually under Subject: "Account Name: USER"
     val = _extract_field(message, "Account Name")
@@ -324,4 +693,82 @@ def _extract_account_name(message: str):
     if val.upper() in ("-", "SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
         return val
     return val
+
+SUSPICIOUS_NETWORK_PROCESSES = {
+    "powershell": "T1059.001 - PowerShell",
+    "pwsh": "T1059.001 - PowerShell",
+    "cmd": "T1059.003 - Windows Command Shell",
+    "wscript": "T1059.005 - Visual Basic",
+    "cscript": "T1059.005 - Visual Basic",
+    "rundll32": "T1218.011 - Rundll32",
+    "mshta": "T1218.005 - Mshta",
+    "regsvr32": "T1218.010 - Regsvr32",
+    "certutil": "T1105 - Ingress Tool Transfer",
+    "bitsadmin": "T1197 - BITS Jobs"
+}
+
+SUSPICIOUS_PORTS = {
+    4444,
+    1337,
+    5555,
+    6666,
+    8081,
+    9001,
+    31337
+}
+
+def load_iocs(path="iocs.json"):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {
+            "bad_ips": [],
+            "bad_domains": [],
+            "bad_processes": []
+        }
+    except json.JSONDecodeError:
+        return {
+            "bad_ips": [],
+            "bad_domains": [],
+            "bad_processes": []
+        }
+
+
+def load_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            return [data]
+
+        if isinstance(data, list):
+            return data
+
+        return []
+
+    except FileNotFoundError:
+        print(f"DEBUG file not found: {path}")
+        return []
+
+    except json.JSONDecodeError as e:
+        print(f"DEBUG JSON decode error for {path}: {e}")
+        return []
+
+
+def is_external_ip(ip):
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+
+        return not (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+        )
+
+    except ValueError:
+        return False
 

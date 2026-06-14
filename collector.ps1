@@ -49,6 +49,9 @@ try {
       Provider    = $_.ProviderName
       MachineName = $_.MachineName
       Message     = $_.Message
+      ParentPID     = $parentPid
+      ParentProcess = $parentName
+      CommandLine   = $commandLine
     }
   }
 } catch {
@@ -195,6 +198,78 @@ foreach ($line in $lines) {
   }
 }
 
-$listeningPath = Join-Path $OutDir "listening_ports.json"
+Write-Host "[+] Collecting active network connections with process names..."
+
+$networkConnections = @()
+
+Get-NetTCPConnection -State Established | ForEach-Object {
+    $processName = "Unknown"
+    $processPath = "Unknown"
+
+    try {
+        $proc = Get-Process -Id $_.OwningProcess -ErrorAction Stop
+        $processName = $proc.ProcessName
+        $processPath = $proc.Path
+    }
+    catch {
+        $processName = "Unknown"
+        $processPath = "Unknown"
+    }
+
+try {
+    $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+    $parentPid = $cimProc.ParentProcessId
+
+    if ($parentPid) {
+        $parentProc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
+
+        if ($parentProc) {
+            $parentName = $parentProc.ProcessName
+        }
+    }
+}
+catch {
+   $parentName = "Unknown"
+}
+
+$networkConnections += [PSCustomObject]@{
+    ProcessName   = $processName
+    ProcessPath   = $processPath
+    ParentPID     = $parentPid
+    ParentProcess = $parentName
+    CommandLine   = $commandLine
+    PID           = $_.OwningProcess
+    LocalAddress  = $_.LocalAddress
+    LocalPort     = $_.LocalPort
+    RemoteAddress = $_.RemoteAddress
+    RemotePort    = $_.RemotePort
+    State         = $_.State
+ }
+}
+
+$parentPid = $null
+$parentName = "Unknown"
+$commandLine = ""
+
+
+
+
+try {
+    $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+    $commandLine = $cimProc.CommandLine
+}
+catch {}
+
+
+
+$networkPath = ".\output\network_connections.json"
+
+$networkConnections |
+ConvertTo-Json -Depth 4 |
+Out-File $networkPath -Encoding UTF8
+
+Write-Host "[+] Wrote $networkPath"
+
+$listeningPath = ".\output\listening_ports.json"
 Write-JsonSafe -Path $listeningPath -Object $listen
 Write-Host "[+] Wrote $listeningPath" -ForegroundColor Green

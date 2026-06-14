@@ -11,6 +11,7 @@ import requests
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+from detections import detect_network_behavior
 
 load_dotenv()
 
@@ -85,10 +86,11 @@ def finding_to_dict(f: Finding) -> Dict[str, Any]:
         "recommendation": f.recommendation,
         "mitre": getattr(f, "mitre", []),
         "evidence": f.evidence,
+        
     }
 
 
-def make_html_report(telemetry, findings):
+def make_html_report(telemetry, findings, network_summary=None):
     rows = []
 
     for f in findings:
@@ -196,9 +198,214 @@ def make_html_report(telemetry, findings):
         """
         for label, count in timeline_items
     ) if timeline_items else "<p>No timeline data available.</p>"
- 
-    # 🔥 DARK MODE HTML (THIS IS WHAT YOU WERE MISSING)
 
+
+ 
+    # 🔥 DARK MODE HTML
+
+    top_ips_html = ""
+    top_processes_html = ""
+
+    if network_summary:
+        top_ips = network_summary.get("top_external_ips", [])
+        top_processes = network_summary.get("top_processes", [])
+        external_count = network_summary.get("external_connection_count", 0)
+        process_tree = network_summary.get("process_tree", [])
+
+        attack_chains = network_summary.get("attack_chains", [])
+
+        attack_chain_html = "".join(
+            f"""
+            <li>
+               <b>{item.get('parent')}</b>
+               └── {item.get('child')}<br>
+               Destination: {item.get('destination')}<br>
+               MITRE: {', '.join(item.get('techniques', []))}
+            </li>
+            """
+            for item in attack_chains
+        )
+
+        risk_history = network_summary.get("risk_history", [])
+
+        risk_history_html = "".join(
+            f"""
+            <tr>
+              <td>{item.get('timestamp')}</td>
+              <td>{item.get('risk_score')}</td>
+              <td>{item.get('risk_level')}</td>
+            </tr>
+            """
+            for item in risk_history[-10:]
+        )
+
+        risk_points = network_summary.get("risk_history", [])[-10:]
+
+        risk_chart_points = ",".join(
+            f"{item.get('risk_score', 0)}"
+            for item in risk_points
+        )
+
+        risk_chart_labels = ",".join(
+            f"'{item.get('timestamp', '')[-8:]}'"
+            for item in risk_points
+        )
+
+        process_tree_html = "".join(
+            f"""
+            <li>
+               <b>{item.get('parent')}</b>
+               └── {item.get('child')}
+               (PID: {item.get('pid')})<br>
+               Destination: {item.get('destination')}
+            </li>
+            """
+            for item in process_tree
+        )
+
+        top_ips_html = "".join(
+            f"""
+            <tr>
+              <td>{item.get('ip')}</td>
+              <td>{item.get('count')}</td>
+            </tr>
+            """
+            for item in top_ips
+        )
+
+        top_processes_html = "".join(
+            f"""
+            <tr>
+              <td>{item.get('process')}</td>
+              <td>{item.get('count')}</td>
+            </tr>
+            """
+            for item in top_processes
+        )
+
+        ioc_hits = network_summary.get("ioc_hits", [])
+
+        ioc_hits_html = "".join(
+            f"""
+            <li>
+              <b>{item.get('title')}</b><br>
+              Severity: {item.get('severity')}<br>
+              <pre>{json.dumps(item.get('evidence', {}), indent=2)}</pre>
+            </li>
+            """
+            for item in ioc_hits
+        ) or "<li>No IOC hits detected.</li>"
+
+        mitre_heatmap = network_summary.get("mitre_heatmap", [])
+
+        mitre_heatmap_html = "".join(
+            f"""
+            <tr>
+              <td>{item.get('technique')}</td>
+              <td>{item.get('count')}</td>
+            </tr>
+            """
+            for item in mitre_heatmap
+        )
+
+        timeline_items = network_summary.get("incident_timeline", [])
+
+        incident_timeline_html = "".join(
+            f"""
+            <li>
+              <b>{item.get('event')}</b><br>
+              Process: {item.get('process')} |
+              Parent: {item.get('parent')} |
+              PID: {item.get('pid')}<br>
+              Destination: {item.get('destination')}<br>
+              <code>{item.get('command_line')}</code>
+            </li>
+            """
+            for item in timeline_items
+        )
+
+        network_html = f"""
+        <div class="card" style="border-left-color:#00bcd4;">
+          <h2>🌎 Network Summary</h2>
+          <h2>🚨 Host Risk Score: {network_summary.get("risk_score", 0)}/100</h2>
+          <p><b>Risk Level:</b> {network_summary.get("risk_level", "Low")}</p>
+          <p><b>External Connections:</b> {external_count}</p>
+          <h3>Incident Timeline</h3>
+          <h3>🌳 Process Tree</h3>
+
+          <ul>
+            {process_tree_html}
+          </ul>
+
+        <h3>🚨 Attack Chains</h3>
+
+        <ul>
+          {attack_chain_html}
+        </ul>
+
+        <h3>📈 Risk Trend History</h3>
+        <table>
+          <tr>
+            <th>Timestamp</th>
+            <th>Risk Score</th>
+            <th>Risk Level</th>
+          </tr>
+          {risk_history_html}
+        </table>
+
+         <h3>🔥 MITRE Heatmap</h3>
+         <table>
+           <tr>
+             <th>Technique</th>
+             <th>Count</th>
+           </tr>
+           {mitre_heatmap_html}
+          </table>
+
+          <ol>
+            {incident_timeline_html}
+          </ol>
+
+          <h3>🚨 IOC Hits</h3>
+          <ul>
+            {ioc_hits_html}
+          </ul>
+
+          <h3>Top External IPs</h3>
+          <table>
+            <tr>
+              <th>Remote IP</th>
+              <th>Connection Count</th>
+            </tr>
+            {top_ips_html}
+          </table>
+
+          <h3>📊 Live Risk Trend Chart</h3>
+
+          <div style="display:flex; align-items:flex-end; gap:8px; height:160px; border-left:1px solid #555; border-bottom:1px solid #555;       padding:10px;">
+            {"".join([
+              f"<div title='Risk {item.get('risk_score', 0)}' style='height:{max(item.get('risk_score', 0), 3)}%; width:24px; background:#00bcd4; border-radius:4px 4px 0 0; text-align:center; font-size:10px;'>{item.get('risk_score', 0)}</div>"
+              for item in risk_points
+            ])}
+          </div>
+
+          <h3>Top Network Processes</h3>
+          <table>
+            <tr>
+              <th>Process</th>
+              <th>Connection Count</th>
+            </tr>
+            {top_processes_html}
+          </table>
+        </div>
+        """
+    else:
+        network_html = """
+        <div class="card" style="border-left-color:#00bcd4;">
+          <h2>🌎 Network Summary</h2>
+          <p>No network summary available.</p>
+        </div>
+        """
 
     return f"""<!doctype html>
 <html style="background:#0f172a; color:#e2e8f0;">
@@ -539,6 +746,9 @@ def make_html_report(telemetry, findings):
       <div class="chart-bar chart-blue" style="width:{tcp_width}%;">{tcp_count}</div>
     </div>
   </div>
+
+{network_html}
+
 </div>
 <h2>Alert Timeline</h2>
 <p class="subtle">Showing last 10 alert intervals</p>
@@ -631,6 +841,32 @@ def parse_args():
     p.add_argument("--demo", action="store_true", help="Include demo finding for report styling tests")
     return p.parse_args()
 
+def update_risk_history(outdir, risk_score, risk_level):
+    history_path = outdir / "risk_history.json"
+
+    if history_path.exists():
+        try:
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            history = []
+    else:
+        history = []
+
+    history.append({
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "risk_score": risk_score,
+        "risk_level": risk_level
+    })
+
+    history = history[-30:]
+
+    history_path.write_text(
+        json.dumps(history, indent=2),
+        encoding="utf-8"
+    )
+
+    return history
+
 def main() -> None:
     args = parse_args()
     outdir = Path("output")
@@ -677,6 +913,17 @@ def main() -> None:
 
     findings_dicts = [finding_to_dict(f) for f in findings]
 
+    network_findings, network_summary = detect_network_behavior("output")
+    findings.extend(network_findings)
+
+    risk_history = update_risk_history(
+        outdir,
+        network_summary.get("risk_score", 0),
+        network_summary.get("risk_level", "Low")
+    )
+
+    network_summary["risk_history"] = risk_history
+
     if args.demo:
        findings_dicts.append({
            "title": "DEMO: Sample High Severity Finding",
@@ -686,8 +933,13 @@ def main() -> None:
            "evidence": [{"note": "Demo enabled via --demo flag."}]
         })
 
-    (outdir / "report.json").write_text(json.dumps(findings_dicts, indent=2), encoding="utf-8")
-    (outdir / "report.html").write_text(make_html_report(telemetry, findings_dicts), encoding="utf-8")
+    report_data = {
+    "findings": findings_dicts,
+    "network_summary": network_summary
+    }
+
+    (outdir / "report.json").write_text(json.dumps(report_data, indent=2), encoding="utf-8")
+    (outdir / "report.html").write_text(make_html_report(telemetry, findings_dicts, network_summary), encoding="utf-8")
 
     print(f"[+] Wrote {outdir/'report.json'}")
     print(f"[+] Wrote {outdir/'report.html'}")
