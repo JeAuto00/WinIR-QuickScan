@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from pathlib import Path
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -9,8 +10,9 @@ import os
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 AUTHORIZED_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0"))
 
-PROJECT_DIR = Path(r"C:\Users\stair\WinIR-QuickScan")
+PROJECT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 def is_authorized(update: Update):
@@ -79,7 +81,7 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     subprocess.run(
-        ["python", "analyze.py"],
+        [sys.executable, "analyze.py"],
         cwd=PROJECT_DIR
     )
 
